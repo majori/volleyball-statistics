@@ -6,86 +6,69 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 )
 
-var HEADERS = map[string][]string{
-	"MATCH":             []string{"Date", "Time", "Season", "Competition", "Phase", "Type", "DayID", "MatchID", "Regulation", "?", "?", "?"},
-	"TEAMS":             []string{"ID", "Name", "Result", "HeadCoach", "Assistant", "Color"},
-	"MORE":              []string{"Referee", "Spectators", "Receipts", "City", "Hall", "Scout"},
-	"SET":               []string{"IsTieBreak", "PartialScore1", "PartialScore2", "PartialScore3", "Score", "Duration"},
-	"PLAYERS-H":         []string{"?", "Number", "Index", "RoleSet1", "RoleSet2", "RoleSet3", "RoleSet4", "RoleSet5", "ID", "LastName", "FirstName", "Nickname", "IsCaptain", "Role", "IsForeign"},
-	"PLAYERS-V":         []string{"?", "Number", "Index", "RoleSet1", "RoleSet2", "RoleSet3", "RoleSet4", "RoleSet5", "ID", "LastName", "FirstName", "Nickname", "IsCaptain", "Role", "IsForeign"},
-	"ATTACKCOMBINATION": []string{"Code", "Zone", "Ball", "Attack", "Description", "?", "?", "?", "?"},
-	"SETTERCALL":        []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?"},
-	"RESERVE":           []string{},
-	"SCOUT":             []string{},
+type Match struct {
+	MatchMeta
+	MatchAdditional
+	Teams  [2]Team
+	Sets   [5]Set
+	Events []Event
 }
 
-type Match struct {
-	Date        string
-	Time        string
+type Team struct {
+	TeamMeta
+	Players map[int]Player
+}
+
+type MatchMeta struct {
+	Date        time.Time
 	Season      string
 	Competition string
 	Phase       string
 	Type        string
-	DayID       string
-	MatchID     string
+	ID          int
 }
 
-type Team struct {
-	ID        string
+type TeamMeta struct {
+	ID        int
 	Name      string
-	Result    string
+	Result    int
 	HeadCoach string
 	Assistant string
 	Color     string
-	DayID     string
-	MatchID   string
 }
 
-type More struct {
+type MatchAdditional struct {
 	Referee    string
 	Spectators string
-	Receipts   string
 	City       string
 	Hall       string
-	Scout      string
 }
 
 type Set struct {
-	IsTieBreak    string
-	PartialScore1 string
-	PartialScore2 string
-	PartialScore3 string
+	IsTieBreak    bool
+	PartialScores [3]string
 	Score         string
-	Duration      string
+	Duration      int // Minutes
 }
 
 type Player struct {
-	Number    string
-	Index     string
-	RoleSet1  string
-	RoleSet2  string
-	RoleSet3  string
-	RoleSet4  string
-	RoleSet5  string
-	ID        string
-	LastName  string
-	FirstName string
-	Nickname  string
-	IsCaptain string
-	Role      string
-	IsForeign string
+	Number     int
+	RoleInSets [5]string
+	ID         int
+	LastName   string
+	FirstName  string
+	Nickname   string
+	IsCaptain  bool
+	Role       string
+	IsForeign  bool
 }
 
-type AttackCombination struct {
-	Code        string
-	Zone        string
-	Ball        string
-	Attack      string
-	Description string
-}
+type Event struct{}
 
 func main() {
 	f, _ := os.Open("../../data/sample.dvw")
@@ -96,24 +79,40 @@ func main() {
 	section := ""
 	rowIndex := 0
 
+	match := Match{}
+
+	csvHeaders := map[string][]string{
+		"MATCH":             []string{"Date", "Time", "Season", "Competition", "Phase", "Type", "DayID", "ID", "Regulation", "?", "?", "?"},
+		"TEAMS":             []string{"ID", "Name", "Result", "HeadCoach", "Assistant", "Color"},
+		"MORE":              []string{"Referee", "Spectators", "Receipts", "City", "Hall", "Scout"},
+		"SET":               []string{"IsTieBreak", "PartialScore1", "PartialScore2", "PartialScore3", "Score", "Duration"},
+		"PLAYERS-H":         []string{"TeamIndex", "Number", "Index", "RoleSet1", "RoleSet2", "RoleSet3", "RoleSet4", "RoleSet5", "ID", "LastName", "FirstName", "Nickname", "IsCaptain", "Role", "IsForeign"},
+		"PLAYERS-V":         []string{"TeamIndex", "Number", "Index", "RoleSet1", "RoleSet2", "RoleSet3", "RoleSet4", "RoleSet5", "ID", "LastName", "FirstName", "Nickname", "IsCaptain", "Role", "IsForeign"},
+		"ATTACKCOMBINATION": []string{"Code", "Zone", "Ball", "Attack", "Description", "?", "?", "?", "?"},
+		"SETTERCALL":        []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?"},
+		"RESERVE":           []string{},
+		"SCOUT":             []string{},
+	}
+
 	for s.Scan() {
 		line := s.Text()
-		match := sectionRegex.FindStringSubmatch(line)
+		regexMatches := sectionRegex.FindStringSubmatch(line)
 
-		if len(match) > 0 {
-			section = match[1]
+		if len(regexMatches) > 0 {
+			section = regexMatches[1]
 			rowIndex = 0
-			fmt.Printf("--%s--\n", section)
 			continue
 		}
 
-		// Non-CSV sections
+		// Skip these sections
 		switch section {
-		case "DATAVOLLEYSCOUT":
-			continue
-		case "WINNINGSYMBOLS":
-			continue
-		case "COMMENTS":
+		case
+			"DATAVOLLEYSCOUT",
+			"COMMENTS",
+			"ATTACKCOMBINATION",
+			"SETTERCALL",
+			"WINNINGSYMBOLS",
+			"RESERVE":
 			continue
 		}
 
@@ -132,7 +131,7 @@ func main() {
 		csvReader := csv.NewReader(strings.NewReader(line))
 		csvReader.Comma = ';'
 
-		header := HEADERS[section]
+		header := csvHeaders[section]
 		row, _ := csvReader.Read()
 
 		values := make(map[string]string)
@@ -146,92 +145,96 @@ func main() {
 
 		switch section {
 		case "MATCH":
-			match := Match{
-				values["Date"],
-				values["Time"],
+			date, _ := time.Parse(
+				"01/02/2006T15.04.05",
+				fmt.Sprintf("%sT%s", values["Date"], values["Time"]),
+			)
+			id, _ := strconv.Atoi(values["ID"])
+			meta := MatchMeta{
+				date,
 				values["Season"],
 				values["Competition"],
 				values["Phase"],
 				values["Type"],
-				values["DayID"],
-				values["MatchID"],
+				id,
 			}
+			match.MatchMeta = meta
 
-			fmt.Println(match)
 		case "TEAMS":
-			team := Team{
-				values["ID"],
+			id, _ := strconv.Atoi(values["ID"])
+			result, _ := strconv.Atoi(values["Result"])
+			meta := TeamMeta{
+				id,
 				values["Name"],
-				values["Result"],
+				result,
 				values["HeadCoach"],
 				values["Assistant"],
 				values["Color"],
-				values["DayID"],
-				values["MatchID"],
 			}
-			fmt.Println(team)
+			match.Teams[rowIndex].TeamMeta = meta
+
 		case "MORE":
-			more := More{
+			additional := MatchAdditional{
 				values["Referee"],
 				values["Spectators"],
-				values["Receipts"],
 				values["City"],
 				values["Hall"],
-				values["Scout"],
 			}
-			fmt.Println(more)
-			// continue
+			match.MatchAdditional = additional
+
 		case "SET":
-			set := Set{
-				values["IsTieBreak"],
-				values["PartialScore1"],
-				values["PartialScore2"],
-				values["PartialScore3"],
-				values["Score"],
-				values["Duration"],
+			// Ignore non-played sets
+			if values["Score"] == "" {
+				continue
 			}
 
-			fmt.Println(set)
-			// continue
+			duration, _ := strconv.Atoi(values["Duration"])
+			set := Set{
+				values["IsTieBreak"] == "True",
+				[3]string{
+					values["PartialScore1"],
+					values["PartialScore2"],
+					values["PartialScore3"],
+				},
+				values["Score"],
+				duration,
+			}
+
+			match.Sets[rowIndex] = set
+
 		case "PLAYERS-H", "PLAYERS-V":
+			index, _ := strconv.Atoi(values["TeamIndex"])
+			number, _ := strconv.Atoi(values["Number"])
+			id, _ := strconv.Atoi(values["ID"])
+
 			player := Player{
-				values["Number"],
-				values["Index"],
-				values["RoleSet1"],
-				values["RoleSet2"],
-				values["RoleSet3"],
-				values["RoleSet4"],
-				values["RoleSet5"],
-				values["ID"],
+				number,
+				[5]string{
+					values["RoleSet1"],
+					values["RoleSet2"],
+					values["RoleSet3"],
+					values["RoleSet4"],
+					values["RoleSet5"],
+				},
+				id,
 				values["LastName"],
 				values["FirstName"],
 				values["Nickname"],
-				values["IsCaptain"],
+				values["IsCaptain"] == "C",
 				values["Role"],
-				values["IsForeign"],
+				values["IsForeign"] == "True",
 			}
-
-			fmt.Println(player)
-			// continue
-		case "ATTACKCOMBINATION":
-			combination := AttackCombination{
-				values["Code"],
-				values["Zone"],
-				values["Ball"],
-				values["Attack"],
-				values["Description"],
+			if match.Teams[index].Players == nil {
+				match.Teams[index].Players = make(map[int]Player)
 			}
+			match.Teams[index].Players[player.ID] = player
 
-			fmt.Println(combination)
-			// continue
-		case "SETTERCALL":
-			// continue
-		case "RESERVE":
-			// continue
 		case "SCOUT":
-			// continue
+			// TODO
 		}
 
 		rowIndex++
 	}
+
+	fmt.Printf("%+v\n", match)
 }
